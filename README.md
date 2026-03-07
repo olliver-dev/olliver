@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="//olliver.dev/assets/images/olliver-logo-nav-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="//olliver.dev/assets/images/olliver-logo-nav-light.png">
+    <source media="(prefers-color-scheme: light)" srcset="//olliver.dev/assets/images/olliver-logo-nav.png">
     <img src="//olliver.dev/assets/images/olliver-logo-nav.png" alt="Olliver">
   </picture>
 </p>
