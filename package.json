@@ -11,9 +11,39 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
   },
-  "keywords": ["mcp", "context", "ai", "llm"],
-  "author": "Olliver",
+  "keywords": [
+    "mcp",
+    "context",
+    "ai",
+    "llm",
+    "model-context-protocol",
+    "collaboration",
+    "portable",
+    "filesystem",
+    "capsule",
+    "claude",
+    "cursor",
+    "chatgpt",
+    "agent"
+  ],
+  "author": "Dan Maxwell",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/olliver-dev/olliver.git"
+  },
+  "homepage": "https://olliver.dev",
+  "bugs": "https://github.com/olliver-dev/olliver/issues",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "LICENSE",
+    "README.md",
+    "config.example.json"
+  ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.4.1",
