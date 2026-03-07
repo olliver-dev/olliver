@@ -52,7 +52,7 @@ Agent: [responds with full awareness of your prior decisions]
 
 ```bash
 # Install
-npm install -g olliver@beta
+npm install -g olliver
 
 # Set up your Shelf
 olli install
@@ -175,10 +175,10 @@ Capsule management happens conversationally through your AI client, not the CLI.
 
 ## Early Access
 
-Olliver is in early access. Install with the `@beta` tag:
+Olliver is in early access. Install globally:
 
 ```bash
-npm install -g olliver@beta
+npm install -g olliver
 ```
 
 We're actively developing and would love feedback. [Sign up for updates](https://olliver.dev/#get-on-the-list) or open an issue.

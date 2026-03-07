@@ -206,7 +206,7 @@ A system health question returns a comprehensive summary. Always make a fresh to
 
 Example response:
 ```
-"Olliver v0.13.0, both Environments healthy.
+"Olliver v0.13.1, both Environments healthy.
 
 compinsite — 18 Capsules on the Shelf, all clean. 98 files in
 Receiving waiting for triage.
