@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://olliver.dev/assets/images/olliver-logo-wordmark-face.png" alt="Olliver" width="280" />
+  <img src="https://olliver.dev/assets/images/olliver-logo-nav.png" alt="Olliver" width="280" />
 </p>
 
 <p align="center">
