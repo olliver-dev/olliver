@@ -1,0 +1,25 @@
+{
+  "name": "olliver",
+  "version": "0.13.0",
+  "description": "Portable context substrate for AI collaboration",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "olli": "./bin/olli.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": ["mcp", "context", "ai", "llm"],
+  "author": "Olliver",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "chalk": "^5.4.1",
+    "commander": "^13.1.0",
+    "inquirer": "^12.4.2",
+    "ora": "^8.2.0",
+    "zod": "^4.3.6"
+  }
+}

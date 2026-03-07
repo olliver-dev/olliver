@@ -1,0 +1,12 @@
+{
+  "_docs": {
+    "description": "Olliver environment configuration",
+    "version": "2.0",
+    "instructions": [
+      "This file is minimal in v2.0.",
+      "Categories and roles are now freeform metadata tags in SHELF.md entries,",
+      "not filesystem directories."
+    ]
+  },
+  "version": "2.0"
+}
