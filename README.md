@@ -2,13 +2,13 @@
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://olliver.dev/assets/images/olliver-logo-nav-dark.png">
     <source media="(prefers-color-scheme: light)" srcset="https://olliver.dev/assets/images/olliver-logo-nav.png">
-    <img src="https://olliver.dev/assets/images/olliver-logo-nav.png" alt="Olliver">
+    <img src="https://olliver.dev/assets/images/olliver-logo-nav.png" alt="Olliver" width="450">
   </picture>
 </p>
 
-<p align="center">
+<h1 align="center">
   <strong>Portable context for AI collaboration.</strong>
-</p>
+</h1>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/olliver"><img src="https://img.shields.io/npm/v/olliver" alt="npm version" /></a>
