@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="https://olliver.dev/assets/images/olliver-logo-nav.png" alt="Olliver" width="280" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="olliver-logo-nav-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="olliver-logo-nav-light.png">
+    <img src="olliver-logo-nav.png" alt="Olliver">
+  </picture>
 </p>
 
 <p align="center">
