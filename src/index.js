@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Olliver MCP Server v0.13.1
+ * Olliver MCP Server v0.13.4
  *
  * Exposes durable context capsules via Model Context Protocol.
  * Single container registration — all environments discovered automatically.
@@ -52,7 +52,7 @@ class OlliverServer {
         this.server = new Server(
             {
                 name: "olliver",
-                version: "0.13.1",
+                version: "0.13.4",
             },
             {
                 capabilities: {
@@ -68,6 +68,9 @@ class OlliverServer {
 
         // Flag to avoid re-reading the dotfile on every resolveOlliContainer() call
         this._shelfResolved = false;
+
+        // Batch promotion counter per environment — resets on scan_shelf
+        this._promotionCounts = new Map();
 
         this.setupToolHandlers();
 
@@ -794,7 +797,7 @@ ${content}`;
 
     /**
      * Promote a draft capsule to a real capsule
-     * Renames .draft.md → .context.md, moves to shelf/
+     * Atomic: moves file, embeds capsule-meta, writes SHELF.md entry
      */
     async promoteDraft(draftFilename, category, targetRole, capsuleMetaArg, envDir, envName) {
         if (!draftFilename || typeof draftFilename !== "string") {
@@ -810,8 +813,62 @@ ${content}`;
                 'target_role is required — used as metadata tag (e.g., "spec", "strategy", "history")',
             );
         }
+        if (!capsuleMetaArg || !capsuleMetaArg.feature) {
+            throw new Error(
+                "capsule_meta with at least a feature name is required for promotion. This metadata is used to write the SHELF.md entry atomically.",
+            );
+        }
 
-        // Search for draft in drafts/ directory
+        // Batch limit: max 10 promotions before scan_shelf is required
+        const count = this._promotionCounts.get(envName) || 0;
+        if (count >= 10) {
+            return {
+                status: "batch_limit",
+                promoted_count: count,
+                message: `Batch limit reached: ${count} capsules promoted in ${envName} without a shelf scan. Run scan_shelf(mode: "coverage") and reconcile any orphans before continuing.`,
+            };
+        }
+
+        // Derive target filename
+        const capsuleFilename = draftFilename.replace(".draft.md", ".context.md");
+        const today = new Date().toISOString().slice(0, 10);
+
+        // Phase 1: Pre-flight collision checks (before any writes)
+
+        // Check SHELF.md for Feature name collision
+        const manifestPath = this.resolveManifestPath("shelf", envDir);
+        if (existsSync(manifestPath)) {
+            const manifestContent = await fs.readFile(manifestPath, "utf-8");
+            const entries = parseManifestEntries(manifestContent);
+            const existing = entries.find((e) => e.feature === capsuleMetaArg.feature);
+            if (existing) {
+                return {
+                    status: "collision",
+                    collision_type: "manifest",
+                    existing_entry: {
+                        feature: existing.feature,
+                        file: existing.file,
+                    },
+                    message: `SHELF.md already has an entry with Feature "${capsuleMetaArg.feature}". Supersede the existing capsule or use a different feature name.`,
+                };
+            }
+        }
+
+        // Check shelf/ for filename collision
+        const targetDir = path.join(envDir, "shelf");
+        const targetPath = path.join(targetDir, capsuleFilename);
+        await fs.mkdir(targetDir, { recursive: true });
+
+        if (existsSync(targetPath)) {
+            return {
+                status: "collision",
+                collision_type: "file",
+                existing_file: capsuleFilename,
+                message: `Capsule already exists at shelf/${capsuleFilename}. Supersede it instead of overwriting.`,
+            };
+        }
+
+        // Check draft exists
         const draftsDir = path.join(envDir, "drafts");
         const draftPath = path.join(draftsDir, draftFilename);
 
@@ -819,65 +876,70 @@ ${content}`;
             throw new Error(`Draft not found: ${draftFilename}`);
         }
 
-        // Read draft content
-        let content = await fs.readFile(draftPath, "utf-8");
+        // Phase 2: Execute promotion (file move + manifest write)
 
-        // Strip the draft metadata comment
+        // Read and prepare draft content
+        let content = await fs.readFile(draftPath, "utf-8");
         content = content.replace(/<!-- DRAFT METADATA\n[\s\S]*?-->\n\n/, "");
 
-        // Build target path — always shelf/
-        const targetDir = path.join(envDir, "shelf");
-        const capsuleFilename = draftFilename.replace(".draft.md", ".context.md");
-        const targetPath = path.join(targetDir, capsuleFilename);
+        // Embed capsule-meta block
+        const metaBlock = [
+            "<!-- capsule-meta",
+            `- Feature: ${capsuleMetaArg.feature}`,
+            `- File: ${capsuleFilename}`,
+            `- Categories: ${category}`,
+            `- Roles: ${targetRole}`,
+            `- Scope: ${capsuleMetaArg.scope || ""}`,
+            `- Depends on: ${capsuleMetaArg.depends_on || "None noted"}`,
+            `- Updated: ${today}`,
+            `- Source Stream: ${capsuleMetaArg.source_stream || "manual"}`,
+            "-->",
+        ].join("\n");
 
-        // Ensure target directory exists
-        await fs.mkdir(targetDir, { recursive: true });
+        const headingMatch = content.match(/^#[^\n]*\n/m);
+        if (headingMatch) {
+            const insertAt = headingMatch.index + headingMatch[0].length;
+            const restOfContent = content.slice(insertAt).trimStart();
+            content =
+                content.slice(0, insertAt) +
+                "\n" +
+                metaBlock +
+                "\n\n" +
+                restOfContent;
+        }
 
-        // Check for collision
-        if (existsSync(targetPath)) {
+        // Write capsule to shelf
+        await fs.writeFile(targetPath, content, "utf-8");
+
+        // Write SHELF.md entry atomically
+        try {
+            await this.editManifest({
+                manifest: "shelf",
+                action: "add",
+                feature: capsuleMetaArg.feature,
+                file: capsuleFilename,
+                categories: category,
+                roles: targetRole,
+                scope: capsuleMetaArg.scope || "",
+                depends_on: capsuleMetaArg.depends_on || "None noted",
+                updated: today,
+                source_stream: capsuleMetaArg.source_stream || "manual",
+            }, envDir, envName);
+        } catch (manifestError) {
+            // Rollback: remove the file we just wrote
+            try {
+                await fs.unlink(targetPath);
+            } catch { /* best effort */ }
             throw new Error(
-                `Capsule already exists at shelf/${capsuleFilename}. Supersede it instead of overwriting.`,
+                `Promotion rolled back — SHELF.md write failed: ${manifestError.message}`,
             );
         }
 
-        // Write the promoted capsule
-        await fs.writeFile(targetPath, content, "utf-8");
-
-        // Embed capsule-meta block if provided
-        if (capsuleMetaArg) {
-            const today = new Date().toISOString().slice(0, 10);
-            const metaBlock = [
-                "<!-- capsule-meta",
-                `- Feature: ${capsuleMetaArg.feature}`,
-                `- File: ${capsuleFilename}`,
-                `- Categories: ${category}`,
-                `- Roles: ${targetRole}`,
-                `- Scope: ${capsuleMetaArg.scope}`,
-                `- Depends on: ${capsuleMetaArg.depends_on || "None noted"}`,
-                `- Updated: ${today}`,
-                `- Source Stream: ${capsuleMetaArg.source_stream}`,
-                "-->",
-            ].join("\n");
-
-            const headingMatch = content.match(/^#[^\n]*\n/m);
-            if (headingMatch) {
-                const insertAt =
-                    headingMatch.index + headingMatch[0].length;
-                const restOfContent = content
-                    .slice(insertAt)
-                    .trimStart();
-                const updatedContent =
-                    content.slice(0, insertAt) +
-                    "\n" +
-                    metaBlock +
-                    "\n\n" +
-                    restOfContent;
-                await fs.writeFile(targetPath, updatedContent, "utf-8");
-            }
-        }
-
-        // Remove the draft
+        // Remove the draft only after both writes succeed
         await fs.unlink(draftPath);
+
+        // Increment batch promotion counter
+        this._promotionCounts.set(envName, count + 1);
 
         return {
             promoted: capsuleFilename,
@@ -887,6 +949,8 @@ ${content}`;
             roles: targetRole,
             environment: envName,
             status: "promoted",
+            shelf_indexed: true,
+            batch_remaining: 10 - (count + 1),
         };
     }
 
@@ -1020,6 +1084,11 @@ original_path: ${draftPath}
         const entries = await fs.readdir(dir, { withFileTypes: true });
 
         for (const entry of entries) {
+            // Skip dot-prefixed subdirectories (.received, etc.)
+            if (entry.isDirectory() && entry.name.startsWith(".")) {
+                continue;
+            }
+
             const relativeName = relativeBase
                 ? path.join(relativeBase, entry.name)
                 : entry.name;
@@ -1161,7 +1230,18 @@ original_path: ${draftPath}
             return draftResult;
         }
 
-        return {
+        // Move source file to .received/ dumpster
+        let sourceMovedToReceived = true;
+        try {
+            const receivedDir = path.join(receivingPath, ".received");
+            await fs.mkdir(receivedDir, { recursive: true });
+            const receivedPath = path.join(receivedDir, path.basename(filename));
+            await fs.rename(filePath, receivedPath);
+        } catch {
+            sourceMovedToReceived = false;
+        }
+
+        const result = {
             status: "ok",
             staged: baseName,
             draft_path: draftResult.draft_path,
@@ -1170,6 +1250,12 @@ original_path: ${draftPath}
             stream_id: streamId || null,
             source: `receiving/${filename}`,
         };
+
+        if (!sourceMovedToReceived) {
+            result.warning = `Source file not moved to .received/ — draft was created but original remains in receiving/${filename}`;
+        }
+
+        return result;
     }
 
     // ─── Environment Creation ─────────────────────────────────────────
@@ -1553,7 +1639,7 @@ ${envDirName}
                 {
                     name: "promote_draft",
                     description:
-                        "Promote a draft capsule to a real capsule. Moves from drafts/ to shelf/. Category and role are stored as metadata tags.",
+                        "Promote a draft capsule to a real capsule. Atomic operation: moves file from drafts/ to shelf/, embeds capsule-meta, and writes the SHELF.md entry in one call. No separate edit_manifest call needed. Enforces a batch limit of 10 promotions per environment — run scan_shelf to reset.",
                     inputSchema: {
                         type: "object",
                         properties: {
@@ -1575,11 +1661,11 @@ ${envDirName}
                             capsule_meta: {
                                 type: "object",
                                 description:
-                                    "Optional capsule identity metadata to embed after the first heading",
+                                    "Required capsule identity metadata. Embedded in the capsule file and written to SHELF.md atomically.",
                                 properties: {
                                     feature: {
                                         type: "string",
-                                        description: "Feature name",
+                                        description: "Feature name (must be unique in SHELF.md)",
                                     },
                                     scope: {
                                         type: "string",
@@ -1594,10 +1680,11 @@ ${envDirName}
                                         description: "Source stream ID",
                                     },
                                 },
+                                required: ["feature"],
                             },
                             environment: envParam,
                         },
-                        required: ["draft_filename", "category", "target_role"],
+                        required: ["draft_filename", "category", "target_role", "capsule_meta"],
                     },
                 },
                 {
@@ -2767,6 +2854,9 @@ ${envDirName}
                 error: 'Invalid mode. Use: "coverage", "consistency", or "full"',
             };
         }
+
+        // Reset batch promotion counter — scan_shelf is the checkpoint
+        this._promotionCounts.set(envName, 0);
 
         try {
             const shelfMdPath = path.join(envDir, "SHELF.md");

@@ -98,17 +98,16 @@ When responding about Mounted Capsules, always mention the Environment if not ob
    ```
    "This draft is tagged as application/spec. Promote it there?"
    ```
-2. On confirmation: `[call promote_draft with category and role]`
-3. After promotion, update SHELF.md — this is a required step, not optional:
-   ```
-   [call edit_manifest({ manifest: "shelf", action: "add", feature: ..., file: ..., scope: ..., ... })]
-   ```
-4. Confirm to user:
+2. On confirmation: `[call promote_draft with capsule_meta]`
+   The tool atomically: moves the file to shelf/, embeds capsule-meta, and writes the SHELF.md entry. No separate `edit_manifest` call needed.
+3. Confirm to user:
    ```
    "Done. It's on the Shelf and indexed. Want me to Mount it?"
    ```
 
-**Key principle:** SHELF.md update is part of promotion. Do not confirm promotion as complete until `edit_manifest` has been called successfully.
+**Key principle:** `promote_draft` is atomic — one call handles both the file move and the SHELF.md entry. The `capsule_meta` parameter is required and must include at least a `feature` name. The tool checks for both filename and Feature name collisions before writing anything.
+
+**Batch limit:** `promote_draft` enforces a hard limit of 10 promotions per environment before requiring a `scan_shelf(mode: "coverage")` call. The tool returns `batch_remaining` on each successful promotion. When the limit is reached, it returns `status: "batch_limit"` and blocks further promotions until `scan_shelf` is called to reset the counter.
 
 ### Pattern 6: Draft Review
 
@@ -206,7 +205,7 @@ A system health question returns a comprehensive summary. Always make a fresh to
 
 Example response:
 ```
-"Olliver v0.13.1, both Environments healthy.
+"Olliver v0.13.4, both Environments healthy.
 
 compinsite — 18 Capsules on the Shelf, all clean. 98 files in
 Receiving waiting for triage.
@@ -341,10 +340,10 @@ These rules apply any time a Capsule lifecycle event occurs:
 
 | Event | Required Action |
 |---|---|
-| Draft promoted | `edit_manifest({ manifest: "shelf", action: "add" })` — add new entry |
+| Draft promoted | Automatic — `promote_draft` writes the SHELF.md entry atomically |
 | Capsule Crated | Automatic — `crate_capsule` handles SHELF.md removal and CRATE.md entry |
 | Capsule Uncrated | `edit_manifest({ manifest: "shelf", action: "add" })` — agent adds Shelf entry for restored Capsule |
-| Capsule superseded | Promote new + `edit_manifest` add, then `crate_capsule` on old (handles removal automatically) |
+| Capsule superseded | `promote_draft` on new (handles SHELF.md automatically), then `crate_capsule` on old (handles removal automatically) |
 | Feature name or scope changes | `edit_manifest({ manifest: "shelf", action: "update", lookup: ... })` — partial update, preserves other fields |
 
 SHELF.md updates after promotion and uncrating are never optional. They are the final step of the lifecycle event.
