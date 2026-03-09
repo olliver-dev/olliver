@@ -1,6 +1,6 @@
 {
   "name": "olliver",
-  "version": "0.13.4",
+  "version": "0.13.5",
   "description": "Portable context substrate for AI collaboration",
   "type": "module",
   "main": "src/index.js",

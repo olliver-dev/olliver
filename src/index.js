@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Olliver MCP Server v0.13.4
+ * Olliver MCP Server v0.13.5
  *
  * Exposes durable context capsules via Model Context Protocol.
  * Single container registration — all environments discovered automatically.
@@ -52,7 +52,7 @@ class OlliverServer {
         this.server = new Server(
             {
                 name: "olliver",
-                version: "0.13.4",
+                version: "0.13.5",
             },
             {
                 capabilities: {
@@ -368,20 +368,34 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
 
     /**
      * Read a specific capsule by filename
-     * Looks in shelf/ directory of specified environment
+     * Resolves directory from location param or auto-detects from extension:
+     *   .context.md → shelf/
+     *   .draft.md   → drafts/
+     *   .crate.md   → crated/
      */
-    async readCapsule(capsulePath, envDir, envName) {
-        const shelfDir = path.join(envDir, "shelf");
-        const fullPath = path.join(shelfDir, capsulePath);
+    async readCapsule(capsulePath, envDir, envName, location) {
+        // Auto-detect location from extension if not specified
+        if (!location) {
+            if (capsulePath.endsWith(".draft.md")) {
+                location = "drafts";
+            } else if (capsulePath.endsWith(".crate.md")) {
+                location = "crated";
+            } else {
+                location = "shelf";
+            }
+        }
+
+        const baseDir = path.join(envDir, location);
+        const fullPath = path.join(baseDir, capsulePath);
 
         // Security: prevent path traversal
         const resolvedPath = path.resolve(fullPath);
-        if (!resolvedPath.startsWith(path.resolve(shelfDir))) {
+        if (!resolvedPath.startsWith(path.resolve(baseDir))) {
             throw new Error(`Invalid capsule path: ${capsulePath}`);
         }
 
         if (!existsSync(resolvedPath)) {
-            throw new Error(`Capsule not found: ${capsulePath}`);
+            throw new Error(`Capsule not found in ${location}/: ${capsulePath}`);
         }
 
         const content = await fs.readFile(resolvedPath, "utf-8");
@@ -389,6 +403,7 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
             path: capsulePath,
             content,
             environment: envName,
+            location,
             metadata: parseCapsuleMetadata(content),
         };
     }
@@ -797,7 +812,7 @@ ${content}`;
 
     /**
      * Promote a draft capsule to a real capsule
-     * Atomic: moves file, embeds capsule-meta, writes SHELF.md entry
+     * Renames .draft.md → .context.md, moves to shelf/
      */
     async promoteDraft(draftFilename, category, targetRole, capsuleMetaArg, envDir, envName) {
         if (!draftFilename || typeof draftFilename !== "string") {
@@ -1446,13 +1461,19 @@ ${envDirName}
                 {
                     name: "read_capsule",
                     description:
-                        "Read a specific capsule by path. Returns full content and metadata. Does not mount the capsule.",
+                        "Read any capsule — shelf, draft, or crated — by filename. Auto-detects location from extension (.context.md → shelf, .draft.md → drafts, .crate.md → crated), or specify location explicitly. Returns full content and metadata. Does not mount the capsule.",
                     inputSchema: {
                         type: "object",
                         properties: {
                             path: {
                                 type: "string",
-                                description: `Capsule filename (e.g., "product-definition.context.md")`,
+                                description: `Capsule filename (e.g., "product-definition.context.md", "api-decisions.draft.md", "old-spec-1741193400.crate.md")`,
+                            },
+                            location: {
+                                type: "string",
+                                enum: ["shelf", "drafts", "crated"],
+                                description:
+                                    "Which directory to read from. Auto-detected from file extension if omitted.",
                             },
                             environment: envParam,
                         },
@@ -1951,13 +1972,13 @@ ${envDirName}
                         }
 
                         case "read_capsule": {
-                            const { path: capsulePath, environment } =
+                            const { path: capsulePath, location, environment } =
                                 request.params.arguments;
                             const env = await this.resolveOrPrompt(environment);
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const capsule = await this.readCapsule(capsulePath, env.envDir, env.resolved);
+                            const capsule = await this.readCapsule(capsulePath, env.envDir, env.resolved, location);
                             return {
                                 content: [
                                     { type: "text", text: capsule.content },

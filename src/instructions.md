@@ -386,7 +386,7 @@ SHELF.md updates after promotion and uncrating are never optional. They are the 
 ### Context Tools
 - **get_rack** — Check what's Mounted (fast, do this often)
 - **list_capsules** — Discover what's available
-- **read_capsule** — Read Capsule content
+- **read_capsule** — Read any Capsule (shelf, draft, or crated) by filename
 - **mount_capsule** — Add to Rack (after user confirmation)
 - **unmount_capsule** — Remove from Rack
 
