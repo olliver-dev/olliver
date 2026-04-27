@@ -38,6 +38,10 @@
   File: getting-started.md
   Scope: Onboarding — install, configure client, first conversation, first extraction
 
+- Topic: Transports
+  File: transports.md
+  Scope: Stdio vs HTTP transports, olli serve usage, mcp-remote bridge for stdio clients, ChatGPT/OAuth caveat, security model, stateless mode rationale
+
 ## Setup Guides
 
 - Topic: ChatGPT Setup
