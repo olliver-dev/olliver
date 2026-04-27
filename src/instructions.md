@@ -334,6 +334,12 @@ This applies to: get_rack, list_capsules, scan_receiving, list_drafts, olli_heal
 
 ---
 
+## Transport Note
+
+Olliver may be reached over either stdio (a local spawned process) or Streamable HTTP (a network-reachable endpoint). Tool semantics are identical across transports — the same 22 tools, the same parameters, the same behavior. You should not need to know which transport carried a request, and users should not be asked. Mention transport only if a tool error explicitly references a network or process failure that the user can act on.
+
+---
+
 ## Manifest Maintenance Rules
 
 These rules apply any time a Capsule lifecycle event occurs:
