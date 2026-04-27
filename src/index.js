@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Olliver MCP Server v0.13.5
+ * Olliver MCP Server v1.0.0
  *
  * Exposes durable context capsules via Model Context Protocol.
  * Single container registration — all environments discovered automatically.
@@ -52,7 +52,7 @@ class OlliverServer {
         this.server = new Server(
             {
                 name: "olliver",
-                version: "0.13.5",
+                version: "1.0.0",
             },
             {
                 capabilities: {

@@ -174,18 +174,8 @@ Capsule management happens conversationally through your AI client, not the CLI.
 ## Documentation
 
 - **[Wiki](https://github.com/olliver-dev/olliver/wiki)** — full documentation, guides, and tool reference
-- **[olliver.dev](https://olliver.dev)** — overview and early access signup
+- **[olliver.dev](https://olliver.dev)** — overview and updates
 - **`olli help`** — built-in guide browser (works offline)
-
-## Early Access
-
-Olliver is in early access. Install globally:
-
-```bash
-npm install -g olliver
-```
-
-We're actively developing and would love feedback. [Sign up for updates](https://olliver.dev/#get-on-the-list) or open an issue.
 
 ---
 
