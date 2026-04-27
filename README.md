@@ -138,10 +138,15 @@ Full reference: [MCP Tools Reference](https://github.com/olliver-dev/olliver/wik
 olli install     # Set up your Shelf
 olli status      # Dashboard — Capsules, Rack, Drafts across all Environments
 olli client      # Interactive MCP client setup guide
+olli serve       # Start Olliver in HTTP transport mode
 olli help        # Interactive operational guide browser
 ```
 
 Capsule management happens conversationally through your AI client, not the CLI.
+
+## Transports
+
+Olliver speaks MCP over **stdio** (the default; clients spawn a local process) or **Streamable HTTP** (a network-reachable endpoint for ChatGPT, hosted agents, and personal LAN setups). Tool semantics are identical across both. Run `olli serve` for an HTTP listener with sensible loopback defaults, or set `OLLIVER_TRANSPORT=http` for a Docker- or systemd-friendly env var path. See `olli help` → Transports for the full guide, including the `mcp-remote` bridge for stdio-only clients and the security model.
 
 ## Architecture
 
