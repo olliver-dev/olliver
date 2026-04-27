@@ -6,6 +6,7 @@
  */
 
 import fs from "fs/promises";
+import http from "node:http";
 import path from "path";
 import { existsSync, readFileSync } from "fs";
 import chalk from "chalk";
@@ -47,6 +48,16 @@ export default function statusCommand(program) {
                 console.log(`Olliver ${versionDisplay}`);
                 blank();
                 label("Container:", containerDir);
+
+                // Probe the default HTTP transport port — surface a running
+                // local server if one responds. Skips silently otherwise.
+                const httpStatus = await probeHttpServer();
+                if (httpStatus) {
+                    label(
+                        "HTTP server:",
+                        `${chalk.green("running")} at ${httpStatus.url} (v${httpStatus.version})`,
+                    );
+                }
 
                 // Discover environments
                 const envs = await discoverEnvironments(containerDir);
@@ -125,6 +136,55 @@ async function countAllFiles(dir) {
     } catch {
         return 0;
     }
+}
+
+/**
+ * Probe the default HTTP transport endpoint. Returns { url, version } if a
+ * server responds in time, null otherwise. Pure best-effort — never throws.
+ */
+async function probeHttpServer({ host = "127.0.0.1", port = 3737, timeoutMs = 250 } = {}) {
+    return new Promise((resolve) => {
+        const req = http.request(
+            {
+                host,
+                port,
+                path: "/health",
+                method: "GET",
+                timeout: timeoutMs,
+            },
+            (res) => {
+                if (res.statusCode !== 200) {
+                    res.resume();
+                    resolve(null);
+                    return;
+                }
+                let body = "";
+                res.setEncoding("utf-8");
+                res.on("data", (chunk) => (body += chunk));
+                res.on("end", () => {
+                    try {
+                        const parsed = JSON.parse(body);
+                        if (parsed?.status === "ok") {
+                            resolve({
+                                url: `http://${host}:${port}`,
+                                version: parsed.version || "unknown",
+                            });
+                            return;
+                        }
+                    } catch {
+                        /* not our server */
+                    }
+                    resolve(null);
+                });
+            },
+        );
+        req.on("error", () => resolve(null));
+        req.on("timeout", () => {
+            req.destroy();
+            resolve(null);
+        });
+        req.end();
+    });
 }
 
 async function countRackEntries(envDir) {
