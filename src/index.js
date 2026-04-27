@@ -17,18 +17,20 @@ import { startStdioTransport } from "./transports/stdio.js";
 
 const transportMode = (process.env.OLLIVER_TRANSPORT || "stdio").toLowerCase();
 
-const server = buildServer();
-
 switch (transportMode) {
     case "stdio":
-        await startStdioTransport(server);
+        // Single long-lived server for stdio — the spawning client owns one
+        // process, and tool state (e.g. promote_draft batch counter) lives
+        // for the duration of that process.
+        await startStdioTransport(buildServer());
         break;
 
     case "http": {
-        // Step 4 wires this up. Stubbed here so transport selection is
-        // testable independently of the HTTP implementation.
+        // Stateless HTTP — the transport mints a fresh server per request
+        // via the buildServer factory. Imported lazily so stdio users don't
+        // pay for express/cors loading.
         const { startHttpTransport } = await import("./transports/http.js");
-        await startHttpTransport(server);
+        await startHttpTransport(buildServer);
         break;
     }
 
