@@ -16,6 +16,7 @@ import installCommand from "../src/cli/commands/install.js";
 import statusCommand from "../src/cli/commands/status.js";
 import helpCommand from "../src/cli/commands/help.js";
 import clientCommand from "../src/cli/commands/client.js";
+import serveCommand from "../src/cli/commands/serve.js";
 import { setQuiet } from "../src/cli/helpers/output.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +53,7 @@ installCommand(program);
 statusCommand(program);
 helpCommand(program);
 clientCommand(program);
+serveCommand(program);
 
 // Handle unknown commands
 program.on("command:*", ([cmd]) => {
