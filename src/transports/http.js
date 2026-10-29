@@ -290,6 +290,20 @@ function printStartupBanner({ url, host, port, version, config, doors }) {
         );
     }
 
+    // A wildcard bind has no single address clients can use, and LAN
+    // clients send Host: <lan-ip>:<port>, which the rebinding check only
+    // accepts if it's allowlisted.
+    const wildcard = host === "0.0.0.0" || host === "::";
+    const clientUrl = wildcard ? url.replace(host, "<lan-ip>") : url;
+    if (wildcard) {
+        lines.push(
+            "  ⚠  Bound to all interfaces. Add this machine's LAN IP to",
+            "     OLLIVER_HTTP_ALLOWED_HOSTS, or bind to the LAN IP directly,",
+            "     or LAN clients will get 403 from the Host check.",
+            "",
+        );
+    }
+
     lines.push(
         "  Connect a stdio-only client (Claude Code, Codex, Desktop) via mcp-remote:",
         "",
@@ -299,13 +313,15 @@ function printStartupBanner({ url, host, port, version, config, doors }) {
         '        "command": "npx",',
     );
     if (doors.side) {
+        // mcp-remote refuses plain HTTP to a non-loopback host without --allow-http
+        const allowHttp = isLoopbackHost(host) ? "" : ' "--allow-http",';
         lines.push(
-            `        "args": ["-y", "mcp-remote", "${url}",`,
+            `        "args": ["-y", "mcp-remote", "${clientUrl}",${allowHttp}`,
             '                 "--header", "Authorization: Bearer ${OLLIVER_LAN_TOKEN}"],',
             '        "env": { "OLLIVER_LAN_TOKEN": "<your LAN token>" }',
         );
     } else {
-        lines.push(`        "args": ["-y", "mcp-remote", "${url}"]`);
+        lines.push(`        "args": ["-y", "mcp-remote", "${clientUrl}"]`);
     }
     lines.push(
         "      }",
