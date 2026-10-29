@@ -416,7 +416,7 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
     // Auth runs before the body is parsed: unauthenticated callers never
     // get a 10mb JSON parse out of us.
     app.post(config.path, requireAuth, express.json({ limit: "10mb" }), async (req, res) => {
-        const reqServer = buildServer();
+        const reqServer = buildServer({ expose: config.expose });
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
             enableJsonResponse: true,

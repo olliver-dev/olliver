@@ -25,6 +25,7 @@ import { fileURLToPath } from "url";
 import { existsSync, readFileSync } from "fs";
 import os from "os";
 import { resolveShelf, checkUpgrade } from "./shared/resolve.js";
+import { safeSegment, resolveInside } from "./shared/safe-segment.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,7 +46,15 @@ function loadInstructions() {
 }
 
 class OlliverServer {
-    constructor() {
+    /**
+     * @param {object} [options]
+     * @param {string[]|null} [options.expose] Environment allowlist. Set by
+     *   the HTTP transport from OLLIVER_EXPOSE; environments not listed
+     *   behave exactly as if they don't exist. Stdio passes nothing.
+     */
+    constructor({ expose = null } = {}) {
+        this.expose = expose && expose.length > 0 ? new Set(expose) : null;
+
         this.server = new Server(
             {
                 name: "olliver",
@@ -140,7 +149,8 @@ class OlliverServer {
             // Container scan failed
         }
 
-        return envs;
+        // OLLIVER_EXPOSE (HTTP only): hidden environments are never discovered
+        return this.expose ? envs.filter((e) => this.expose.has(e)) : envs;
     }
 
     /**
@@ -160,6 +170,8 @@ class OlliverServer {
         }
 
         if (environment) {
+            safeSegment(environment, "environment");
+
             // Normalize: strip leading dot if provided
             let normalized = environment.replace(/^\./, "");
 
@@ -367,6 +379,8 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
      *   .crate.md   → crated/
      */
     async readCapsule(capsulePath, envDir, envName, location) {
+        safeSegment(capsulePath, "path");
+
         // Auto-detect location from extension if not specified
         if (!location) {
             if (capsulePath.endsWith(".draft.md")) {
@@ -378,14 +392,13 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
             }
         }
 
-        const baseDir = path.join(envDir, location);
-        const fullPath = path.join(baseDir, capsulePath);
-
-        // Security: prevent path traversal
-        const resolvedPath = path.resolve(fullPath);
-        if (!resolvedPath.startsWith(path.resolve(baseDir))) {
-            throw new Error(`Invalid capsule path: ${capsulePath}`);
+        if (!["shelf", "drafts", "crated"].includes(location)) {
+            throw new Error(
+                `Invalid location: "${location}". Use "shelf", "drafts", or "crated".`,
+            );
         }
+
+        const resolvedPath = resolveInside(envDir, location, capsulePath);
 
         if (!existsSync(resolvedPath)) {
             throw new Error(`Capsule not found in ${location}/: ${capsulePath}`);
@@ -422,6 +435,8 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
      * Unmount a capsule from the Rack
      */
     async unmountCapsule(capsulePath, envDir, envName) {
+        safeSegment(capsulePath, "path");
+
         const rack = await this.loadRack(envDir);
         rack.delete(capsulePath);
         await this.saveRack(rack, envDir, envName);
@@ -464,6 +479,7 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
         if (!streamId || typeof streamId !== "string") {
             throw new Error("stream_id is required");
         }
+        safeSegment(streamId, "stream_id");
         if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(streamId)) {
             throw new Error(
                 `Invalid stream_id "${streamId}". Must be lowercase, hyphen-separated, no spaces or punctuation (e.g., "env-resolution-go4")`,
@@ -478,7 +494,7 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
     async beginExtraction(streamId, envDir, envName) {
         this.validateStreamId(streamId);
 
-        const extractionDir = path.join(envDir, "extractions", streamId);
+        const extractionDir = resolveInside(envDir, "extractions", streamId);
 
         if (existsSync(extractionDir)) {
             throw new Error(
@@ -533,7 +549,8 @@ ${new Date().toISOString()}
             throw new Error("content is required");
         }
 
-        const extractionDir = path.join(envDir, "extractions", streamId);
+        const safeName = safeSegment(filename, "filename");
+        const extractionDir = resolveInside(envDir, "extractions", streamId);
 
         if (!existsSync(extractionDir)) {
             throw new Error(
@@ -541,8 +558,7 @@ ${new Date().toISOString()}
             );
         }
 
-        const safeName = path.basename(filename);
-        const filePath = path.join(extractionDir, safeName);
+        const filePath = resolveInside(envDir, "extractions", streamId, safeName);
 
         await fs.writeFile(filePath, content, "utf-8");
         await this.updateExtractionState(streamId, safeName, envDir);
@@ -606,8 +622,12 @@ ${new Date().toISOString()}
         if (!content || typeof content !== "string") {
             throw new Error("content is required");
         }
+        safeSegment(filename, "filename");
+        if (renameTo !== undefined && renameTo !== null) {
+            safeSegment(renameTo, "rename_to");
+        }
 
-        const draftsDir = path.join(envDir, "drafts");
+        const draftsDir = resolveInside(envDir, "drafts");
         await fs.mkdir(draftsDir, { recursive: true });
 
         // Normalize filename
@@ -616,7 +636,7 @@ ${new Date().toISOString()}
             .replace(/\.draft\.md$/, "")
             .replace(/\.md$/, "");
         const draftFilename = `${baseName}.draft.md`;
-        const draftPath = path.join(draftsDir, draftFilename);
+        const draftPath = resolveInside(envDir, "drafts", draftFilename);
 
         // Collision handling
         let renamedExisting = null;
@@ -642,7 +662,7 @@ ${new Date().toISOString()}
                     .replace(/\.draft\.md$/, "")
                     .replace(/\.md$/, "");
                 const renameFilename = `${renameBase}.draft.md`;
-                const renamePath = path.join(draftsDir, renameFilename);
+                const renamePath = resolveInside(envDir, "drafts", renameFilename);
 
                 if (existsSync(renamePath)) {
                     return {
@@ -698,14 +718,14 @@ ${content}`;
         if (!content || typeof content !== "string") {
             throw new Error("content is required");
         }
+        safeSegment(filename, "filename");
 
-        const draftsDir = path.join(envDir, "drafts");
         const baseName = filename
             .replace(/\.context\.md$/, "")
             .replace(/\.draft\.md$/, "")
             .replace(/\.md$/, "");
         const draftFilename = `${baseName}.draft.md`;
-        const draftPath = path.join(draftsDir, draftFilename);
+        const draftPath = resolveInside(envDir, "drafts", draftFilename);
 
         if (!existsSync(draftPath)) {
             return {
@@ -826,6 +846,7 @@ ${content}`;
                 "capsule_meta with at least a feature name is required for promotion. This metadata is used to write the SHELF.md entry atomically.",
             );
         }
+        safeSegment(draftFilename, "draft_filename");
 
         // Batch limit: max 10 promotions before scan_shelf is required
         const count = this._promotionCounts.get(envName) || 0;
@@ -863,8 +884,8 @@ ${content}`;
         }
 
         // Check shelf/ for filename collision
-        const targetDir = path.join(envDir, "shelf");
-        const targetPath = path.join(targetDir, capsuleFilename);
+        const targetDir = resolveInside(envDir, "shelf");
+        const targetPath = resolveInside(envDir, "shelf", capsuleFilename);
         await fs.mkdir(targetDir, { recursive: true });
 
         if (existsSync(targetPath)) {
@@ -877,8 +898,7 @@ ${content}`;
         }
 
         // Check draft exists
-        const draftsDir = path.join(envDir, "drafts");
-        const draftPath = path.join(draftsDir, draftFilename);
+        const draftPath = resolveInside(envDir, "drafts", draftFilename);
 
         if (!existsSync(draftPath)) {
             throw new Error(`Draft not found: ${draftFilename}`);
@@ -970,10 +990,10 @@ ${content}`;
         if (!draftFilename || typeof draftFilename !== "string") {
             throw new Error("draft_filename is required");
         }
+        safeSegment(draftFilename, "draft_filename");
 
         // Search for draft in drafts/ directory
-        const draftsDir = path.join(envDir, "drafts");
-        const draftPath = path.join(draftsDir, draftFilename);
+        const draftPath = resolveInside(envDir, "drafts", draftFilename);
 
         if (!existsSync(draftPath)) {
             throw new Error(`Draft not found: ${draftFilename}`);
@@ -982,20 +1002,21 @@ ${content}`;
         const content = await fs.readFile(draftPath, "utf-8");
         const metadata = this.parseDraftMetadata(content);
 
-        // Determine rejection destination
+        // Determine rejection destination. stream_id comes from the draft's
+        // own header, which edit_draft_capsule can rewrite — treat as untrusted.
         let rejectedDir;
         if (metadata.stream_id && metadata.stream_id !== "none") {
-            const extractionDir = path.join(
-                envDir, "extractions", metadata.stream_id,
+            safeSegment(metadata.stream_id, "stream_id in draft metadata");
+            rejectedDir = resolveInside(
+                envDir, "extractions", metadata.stream_id, "rejected",
             );
-            rejectedDir = path.join(extractionDir, "rejected");
         } else {
-            rejectedDir = path.join(envDir, "rejected");
+            rejectedDir = resolveInside(envDir, "rejected");
         }
 
         await fs.mkdir(rejectedDir, { recursive: true });
 
-        const rejectedPath = path.join(rejectedDir, draftFilename);
+        const rejectedPath = resolveInside(rejectedDir, draftFilename);
         await fs.rename(draftPath, rejectedPath);
 
         const rejectionMeta = `<!-- REJECTION
@@ -1191,13 +1212,17 @@ original_path: ${draftPath}
             this.validateStreamId(streamId);
         }
 
-        const receivingPath = path.join(envDir, "receiving");
-        const filePath = path.resolve(path.join(receivingPath, filename));
-
-        // Security: prevent path traversal
-        if (!filePath.startsWith(path.resolve(receivingPath))) {
-            throw new Error("Invalid filename: path traversal not allowed");
+        // scan_receiving reports files in subdirectories by relative path
+        // (e.g. "notes/meeting.md"), so validate each segment rather than
+        // the whole value.
+        const segments = filename.split(/[\\/]/);
+        for (const segment of segments) {
+            safeSegment(segment, "filename");
         }
+        const leafName = segments[segments.length - 1];
+
+        const receivingPath = resolveInside(envDir, "receiving");
+        const filePath = resolveInside(envDir, "receiving", ...segments);
 
         if (!existsSync(filePath)) {
             throw new Error(`File not found in receiving: ${filename}`);
@@ -1215,8 +1240,7 @@ original_path: ${draftPath}
         }
 
         // Derive base name for draft
-        const baseName = path
-            .basename(filename)
+        const baseName = leafName
             .replace(/\.context\.md$/, "")
             .replace(/\.md$/, "");
 
@@ -1241,9 +1265,9 @@ original_path: ${draftPath}
         // Move source file to .received/ dumpster
         let sourceMovedToReceived = true;
         try {
-            const receivedDir = path.join(receivingPath, ".received");
+            const receivedDir = resolveInside(receivingPath, ".received");
             await fs.mkdir(receivedDir, { recursive: true });
-            const receivedPath = path.join(receivedDir, path.basename(filename));
+            const receivedPath = resolveInside(receivedDir, leafName);
             await fs.rename(filePath, receivedPath);
         } catch {
             sourceMovedToReceived = false;
@@ -1301,6 +1325,16 @@ original_path: ${draftPath}
             };
         }
 
+        // OLLIVER_EXPOSE (HTTP only): names outside the allowlist can't be
+        // created here. The message is the same whether or not the
+        // environment exists on disk, so hidden environments stay hidden.
+        if (this.expose && !this.expose.has(name)) {
+            return {
+                status: "error",
+                message: `'${name}' is not in this server's exposed environment list. Create it from a local client instead.`,
+            };
+        }
+
         // Resolve the .olli/ container
         let container;
         try {
@@ -1324,7 +1358,7 @@ original_path: ${draftPath}
         }
 
         const envDirName = `.${name}`;
-        const envPath = path.join(container, envDirName);
+        const envPath = resolveInside(container, envDirName);
 
         // Collision detection
         if (existsSync(envPath)) {
@@ -2426,6 +2460,8 @@ ${envDirName}
     // ─── Crating Tools ───────────────────────────────────────────────
 
     async crateCapsule({ path: capsulePath }, envDir, envName) {
+        safeSegment(capsulePath, "path");
+
         // Validate extension
         if (!capsulePath.endsWith(".context.md")) {
             return {
@@ -2435,8 +2471,7 @@ ${envDirName}
         }
 
         // Resolve paths — capsulePath is filename only, lives in shelf/
-        const shelfDir = path.join(envDir, "shelf");
-        const sourcePath = path.join(shelfDir, capsulePath);
+        const sourcePath = resolveInside(envDir, "shelf", capsulePath);
 
         // Validate file exists
         if (!existsSync(sourcePath)) {
@@ -2568,6 +2603,10 @@ ${envDirName}
     }
 
     async uncrateCapsule({ path: cratedPath }, envDir, envName) {
+        if (!cratedPath || typeof cratedPath !== "string") {
+            throw new Error("path is required");
+        }
+
         // Validate extension
         if (!cratedPath.endsWith(".crate.md")) {
             return {
@@ -2576,8 +2615,13 @@ ${envDirName}
             };
         }
 
-        // Resolve paths
-        const fullCratedPath = path.join(envDir, cratedPath);
+        // Accept the "crated/<file>" form crate_capsule returns, or a bare
+        // filename. Either way the file must live directly in crated/.
+        const crateName = safeSegment(
+            cratedPath.replace(/^crated[\\/]/, ""),
+            "path",
+        );
+        const fullCratedPath = resolveInside(envDir, "crated", crateName);
 
         // Validate file exists
         if (!existsSync(fullCratedPath)) {
@@ -2615,11 +2659,11 @@ ${envDirName}
         }
 
         // Derive restored filename from crate filename — swap .crate.md → .context.md
-        const crateFilename = path.basename(cratedPath);
+        const crateFilename = crateName;
         const restoredFilename = crateFilename.replace(/\.crate\.md$/, ".context.md");
 
-        const shelfDir = path.join(envDir, "shelf");
-        const restoredFullPath = path.join(shelfDir, restoredFilename);
+        const shelfDir = resolveInside(envDir, "shelf");
+        const restoredFullPath = resolveInside(envDir, "shelf", restoredFilename);
 
         // Check destination doesn't already exist
         if (existsSync(restoredFullPath)) {
@@ -3106,6 +3150,11 @@ ${envDirName}
     }, envDir, envName) {
         const manifestPath = this.resolveManifestPath(manifest, envDir);
 
+        // File is filename-only; scans later join it onto shelf/
+        if (file !== undefined && file !== null) {
+            safeSegment(file, "file");
+        }
+
         if (!existsSync(manifestPath)) {
             throw new Error(
                 `${manifest.toUpperCase()}.md not found in ${envName} environment`,
@@ -3263,9 +3312,12 @@ ${envDirName}
  * Factory: construct a fully-configured MCP Server with all tool handlers
  * wired and instructions.md loaded. Connect to a transport via
  * `await server.connect(transport)`.
+ *
+ * Options (HTTP transport only): `expose` — environment allowlist from
+ * OLLIVER_EXPOSE. Stdio calls this with no options.
  */
-export function buildServer() {
-    return new OlliverServer().server;
+export function buildServer(options = {}) {
+    return new OlliverServer(options).server;
 }
 
 /**
