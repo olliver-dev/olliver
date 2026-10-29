@@ -13,16 +13,23 @@
  * + enableJsonResponse: true skips the entire session-dictionary code path.
  *
  * Defaults to loopback (127.0.0.1:3737/mcp) with DNS rebinding protection,
- * restrictive CORS, request logging, and a /health endpoint. The user is
- * responsible for not exposing a non-auth listener to the public internet —
- * see the in-package transports/http-mode guide.
+ * restrictive CORS, request logging, and a /health endpoint.
+ *
+ * Auth is two doors, checked ahead of the MCP handler:
+ *   front — Cloudflare Access verifies the user at the edge (Managed OAuth)
+ *           and injects Cf-Access-Jwt-Assertion; we verify that JWT.
+ *   side  — LAN clients send Authorization: Bearer <OLLIVER_LAN_TOKEN>.
+ * A non-loopback bind refuses to start without at least one door. Loopback
+ * with no doors configured stays open for local dev.
  */
 
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import { readFileSync } from "fs";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -43,6 +50,12 @@ const DEFAULTS = {
 const LAN_TOKEN_MIN_LENGTH = 32;
 
 const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+
+const UNAUTHORIZED_BODY = {
+    jsonrpc: "2.0",
+    error: { code: -32001, message: "Unauthorized" },
+    id: null,
+};
 
 function readPackageVersion() {
     try {
@@ -155,6 +168,90 @@ export function resolveDoors(config) {
     }
 
     return doors;
+}
+
+/**
+ * Build the auth middleware for the MCP path. Credentials are checked in
+ * this order:
+ *
+ *   1. Cf-Access-Jwt-Assertion present → verify it against the Access JWKS
+ *      (front door). Any Authorization header is ignored on this path; the
+ *      client's opaque Access OAuth token can ride along there.
+ *   2. Authorization: Bearer present and a LAN token configured → length
+ *      check, then constant-time compare (side door).
+ *   3. Anything else → allowed only in loopback dev mode (no doors), else 401.
+ *
+ * On success the principal lands on res.locals.principal. Rejections log a
+ * reason code only — never the presented credential.
+ */
+function makeAuthMiddleware({ config, doors, log }) {
+    const issuer = doors.front ? `https://${config.cfTeamDomain}` : null;
+    const jwks = doors.front
+        ? createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`))
+        : null;
+    const lanToken = doors.side ? Buffer.from(config.lanToken, "utf-8") : null;
+    const openDevMode = !doors.front && !doors.side && isLoopbackHost(config.host);
+
+    const reject = (res, reason) => {
+        log("warn", `auth rejected: ${reason}`);
+        res.status(401).json(UNAUTHORIZED_BODY);
+    };
+
+    return async (req, res, next) => {
+        const assertion = req.get("cf-access-jwt-assertion");
+        if (assertion) {
+            if (!jwks) return reject(res, "front door not configured");
+            try {
+                const { payload } = await jwtVerify(assertion, jwks, {
+                    issuer,
+                    audience: config.cfAud,
+                });
+                res.locals.principal = {
+                    door: "front",
+                    subject: payload.email ?? payload.common_name ?? payload.sub,
+                };
+                return next();
+            } catch (err) {
+                return reject(res, `front door ${err.code || err.name || "verification failed"}`);
+            }
+        }
+
+        const bearer = /^Bearer\s+(.+)$/i.exec(req.get("authorization") || "");
+        if (bearer && lanToken) {
+            const presented = Buffer.from(bearer[1], "utf-8");
+            if (
+                presented.length === lanToken.length &&
+                crypto.timingSafeEqual(presented, lanToken)
+            ) {
+                res.locals.principal = { door: "side" };
+                return next();
+            }
+            return reject(res, "side door token mismatch");
+        }
+
+        if (openDevMode) {
+            res.locals.principal = { door: "none" };
+            return next();
+        }
+
+        return reject(res, "no credential");
+    };
+}
+
+/**
+ * Summarize a parsed JSON-RPC body for the request log: method, plus the
+ * tool name on tools/call. Never arguments. Values are sanitized so a
+ * hostile client can't forge log lines.
+ */
+function describeRpc(body) {
+    const clean = (value) => String(value).replace(/[^\w./-]/g, "?").slice(0, 64);
+    if (Array.isArray(body)) return " method=batch";
+    if (!body || typeof body !== "object" || typeof body.method !== "string") return "";
+    let summary = ` method=${clean(body.method)}`;
+    if (body.method === "tools/call" && typeof body.params?.name === "string") {
+        summary += ` tool=${clean(body.params.name)}`;
+    }
+    return summary;
 }
 
 function makeLogger(level) {
@@ -279,9 +376,10 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
         allowedOrigins.push(`https://${extra}`);
     }
 
+    const requireAuth = makeAuthMiddleware({ config, doors, log });
+
     const app = express();
 
-    app.use(express.json({ limit: "10mb" }));
     app.use(cors({
         origin: allowedOrigins,
         methods: ["GET", "POST", "OPTIONS"],
@@ -297,14 +395,17 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
     app.use((req, res, next) => {
         const start = Date.now();
         res.on("finish", () => {
+            const door = res.locals.principal?.door ?? "-";
             log(
                 "info",
-                `${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`,
+                `${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms` +
+                ` door=${door}${describeRpc(req.body)}`,
             );
         });
         next();
     });
 
+    // Unauthenticated by design — status and version only, no Shelf data.
     app.get("/health", (_req, res) => {
         res.type("application/json").status(200).json({
             status: "ok",
@@ -312,7 +413,9 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
         });
     });
 
-    app.post(config.path, async (req, res) => {
+    // Auth runs before the body is parsed: unauthenticated callers never
+    // get a 10mb JSON parse out of us.
+    app.post(config.path, requireAuth, express.json({ limit: "10mb" }), async (req, res) => {
         const reqServer = buildServer();
         const transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: undefined,
