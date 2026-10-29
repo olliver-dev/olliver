@@ -1487,10 +1487,16 @@ ${envDirName}
                 "Environment name (e.g., 'olli-dev', 'compinsite'). If omitted, you'll be prompted to select one.",
         };
 
+        // Tool annotations. ChatGPT treats a tool without readOnlyHint as a
+        // write and asks the user to confirm every call.
+        const READ_ONLY = { readOnlyHint: true, openWorldHint: false };
+        const WRITES = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+
         this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
             tools: [
                 {
                     name: "list_capsules",
+                    annotations: READ_ONLY,
                     description:
                         "Discover all capsules in an environment. Returns metadata including category, role, purpose, and path.",
                     inputSchema: {
@@ -1502,6 +1508,7 @@ ${envDirName}
                 },
                 {
                     name: "read_capsule",
+                    annotations: READ_ONLY,
                     description:
                         "Read any capsule — shelf, draft, or crated — by filename. Auto-detects location from extension (.context.md → shelf, .draft.md → drafts, .crate.md → crated), or specify location explicitly. Returns full content and metadata. Does not mount the capsule.",
                     inputSchema: {
@@ -1524,6 +1531,7 @@ ${envDirName}
                 },
                 {
                     name: "mount_capsule",
+                    annotations: WRITES,
                     description:
                         "Mount a capsule to the Rack (make it participate in current context). Persists to RACK.md.",
                     inputSchema: {
@@ -1541,6 +1549,7 @@ ${envDirName}
                 },
                 {
                     name: "unmount_capsule",
+                    annotations: WRITES,
                     description:
                         "Unmount a capsule from the Rack. Updates RACK.md. Does not delete the capsule.",
                     inputSchema: {
@@ -1558,6 +1567,7 @@ ${envDirName}
                 },
                 {
                     name: "get_rack",
+                    annotations: READ_ONLY,
                     description:
                         "Get current Rack state (list of mounted capsules participating in context). Shows environment and scope.",
                     inputSchema: {
@@ -1569,6 +1579,7 @@ ${envDirName}
                 },
                 {
                     name: "begin_extraction",
+                    annotations: WRITES,
                     description:
                         "Start a new extraction session. Creates a working directory for extraction artifacts. Stream ID must be a lowercase, hyphen-separated slug.",
                     inputSchema: {
@@ -1586,6 +1597,7 @@ ${envDirName}
                 },
                 {
                     name: "write_pass_output",
+                    annotations: WRITES,
                     description:
                         "Write a pass output file to the extraction working directory. Used for topic discovery plans and intermediate analysis.",
                     inputSchema: {
@@ -1611,6 +1623,7 @@ ${envDirName}
                 },
                 {
                     name: "write_draft_capsule",
+                    annotations: WRITES,
                     description:
                         "Write a draft capsule (.draft.md) to the drafts/ directory. Drafts are invisible to list_capsules until promoted. Handles collisions via if_exists parameter.",
                     inputSchema: {
@@ -1664,6 +1677,7 @@ ${envDirName}
                 },
                 {
                     name: "edit_draft_capsule",
+                    annotations: WRITES,
                     description:
                         "Update an existing draft capsule in place with new content. The draft must already exist. This is a full content replacement.",
                     inputSchema: {
@@ -1685,6 +1699,7 @@ ${envDirName}
                 },
                 {
                     name: "list_drafts",
+                    annotations: READ_ONLY,
                     description:
                         "List all pending draft capsules (.draft.md) in the drafts/ directory, optionally filtered by category metadata.",
                     inputSchema: {
@@ -1701,6 +1716,7 @@ ${envDirName}
                 },
                 {
                     name: "promote_draft",
+                    annotations: WRITES,
                     description:
                         "Promote a draft capsule to a real capsule. Atomic operation: moves file from drafts/ to shelf/, embeds capsule-meta, and writes the SHELF.md entry in one call. No separate edit_manifest call needed. Enforces a batch limit of 10 promotions per environment — run scan_shelf to reset.",
                     inputSchema: {
@@ -1752,6 +1768,7 @@ ${envDirName}
                 },
                 {
                     name: "reject_draft",
+                    annotations: WRITES,
                     description:
                         "Reject a draft capsule. Archives to extraction rejected/ directory with reason metadata.",
                     inputSchema: {
@@ -1773,6 +1790,7 @@ ${envDirName}
                 },
                 {
                     name: "scan_receiving",
+                    annotations: READ_ONLY,
                     description:
                         "Scan an environment's receiving directory. Returns file inventory with previews for triage.",
                     inputSchema: {
@@ -1784,6 +1802,7 @@ ${envDirName}
                 },
                 {
                     name: "stage_source",
+                    annotations: WRITES,
                     description:
                         "Read a file from receiving and write it as a draft capsule. The agent is responsible for classification and content transformation.",
                     inputSchema: {
@@ -1816,6 +1835,7 @@ ${envDirName}
                 },
                 {
                     name: "create_environment",
+                    annotations: WRITES,
                     description:
                         "Create a new environment subdirectory inside the .olli/ container. Scaffolds SHELF.md, RACK.md, CRATE.md, shelf/, drafts/, receiving/, extractions/, and crated/ directories. New environments are immediately available — no configuration change needed.",
                     inputSchema: {
@@ -1832,6 +1852,7 @@ ${envDirName}
                 },
                 {
                     name: "read_manifest",
+                    annotations: READ_ONLY,
                     description:
                         "Read and parse a manifest file (SHELF.md, RACK.md, or CRATE.md). Returns all entries as structured objects.",
                     inputSchema: {
@@ -1849,6 +1870,7 @@ ${envDirName}
                 },
                 {
                     name: "edit_manifest",
+                    annotations: WRITES,
                     description:
                         "Add, update, or remove entries in a manifest (SHELF.md, RACK.md, or CRATE.md). Update preserves fields not explicitly passed.",
                     inputSchema: {
@@ -1915,6 +1937,7 @@ ${envDirName}
                 },
                 {
                     name: "crate_capsule",
+                    annotations: WRITES,
                     description:
                         "Move a capsule from shelf/ to crated/, changing extension to .crate.md.",
                     inputSchema: {
@@ -1932,6 +1955,7 @@ ${envDirName}
                 },
                 {
                     name: "uncrate_capsule",
+                    annotations: WRITES,
                     description:
                         "Restore a crated capsule to its original Shelf path.",
                     inputSchema: {
@@ -1949,6 +1973,7 @@ ${envDirName}
                 },
                 {
                     name: "olli_health",
+                    annotations: READ_ONLY,
                     description:
                         "System health snapshot across all environments: version, rack state, shelf counts, receiving/staging files, active extractions, and coverage scan.",
                     inputSchema: {
@@ -1958,6 +1983,7 @@ ${envDirName}
                 },
                 {
                     name: "scan_shelf",
+                    annotations: READ_ONLY,
                     description:
                         "Shelf integrity scan with three modes: coverage (index diff), consistency (capsule-meta vs SHELF.md), or full (both).",
                     inputSchema: {
@@ -1975,6 +2001,7 @@ ${envDirName}
                 },
                 {
                     name: "get_help",
+                    annotations: READ_ONLY,
                     description:
                         "Browse and read Olliver guides. Returns the guide manifest if no topic is specified, or the matching guide content if a topic is provided.",
                     inputSchema: {
