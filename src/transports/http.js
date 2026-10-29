@@ -33,7 +33,14 @@ const DEFAULTS = {
     host: "127.0.0.1",
     path: "/mcp",
     logLevel: "info",
+    lanToken: null,
+    cfTeamDomain: null,
+    cfAud: null,
+    allowedHosts: [],
+    expose: null,
 };
+
+const LAN_TOKEN_MIN_LENGTH = 32;
 
 const LOG_LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
 
@@ -47,27 +54,107 @@ function readPackageVersion() {
 }
 
 /**
+ * Split a comma-separated list (env var or CLI flag) into trimmed,
+ * non-empty entries. Arrays get the same normalization.
+ */
+function parseList(value) {
+    if (value === undefined || value === null) return [];
+    const items = Array.isArray(value) ? value : String(value).split(",");
+    return items.map((item) => String(item).trim()).filter(Boolean);
+}
+
+/**
+ * Accept "team.cloudflareaccess.com" or "https://team.cloudflareaccess.com/"
+ * and return the bare host that the issuer and certs URL are built from.
+ */
+function normalizeTeamDomain(value) {
+    if (!value) return null;
+    const bare = String(value).trim().replace(/^https:\/\//i, "").replace(/\/+$/, "");
+    return bare || null;
+}
+
+/**
  * Resolve transport config. Precedence: explicit overrides (CLI flags) >
  * env vars > defaults. CLI integration calls this with overrides; the env
  * var path passes overrides = {} so env vars take effect.
+ *
+ * The LAN token is env-only by design — a flag would leak it into shell
+ * history and the process table.
  */
 export function resolveHttpConfig(overrides = {}) {
+    const env = process.env;
     const fromEnv = {};
-    if (process.env.OLLIVER_HTTP_PORT) {
-        const p = Number.parseInt(process.env.OLLIVER_HTTP_PORT, 10);
+    if (env.OLLIVER_HTTP_PORT) {
+        const p = Number.parseInt(env.OLLIVER_HTTP_PORT, 10);
         if (Number.isFinite(p)) fromEnv.port = p;
     }
-    if (process.env.OLLIVER_HTTP_HOST) fromEnv.host = process.env.OLLIVER_HTTP_HOST;
-    if (process.env.OLLIVER_HTTP_PATH) fromEnv.path = process.env.OLLIVER_HTTP_PATH;
-    if (process.env.OLLIVER_HTTP_LOG_LEVEL) {
-        fromEnv.logLevel = process.env.OLLIVER_HTTP_LOG_LEVEL.toLowerCase();
+    if (env.OLLIVER_HTTP_HOST) fromEnv.host = env.OLLIVER_HTTP_HOST;
+    if (env.OLLIVER_HTTP_PATH) fromEnv.path = env.OLLIVER_HTTP_PATH;
+    if (env.OLLIVER_HTTP_LOG_LEVEL) {
+        fromEnv.logLevel = env.OLLIVER_HTTP_LOG_LEVEL.toLowerCase();
     }
+    if (env.OLLIVER_LAN_TOKEN) fromEnv.lanToken = env.OLLIVER_LAN_TOKEN;
+    if (env.OLLIVER_CF_TEAM_DOMAIN) fromEnv.cfTeamDomain = env.OLLIVER_CF_TEAM_DOMAIN;
+    if (env.OLLIVER_CF_AUD) fromEnv.cfAud = env.OLLIVER_CF_AUD;
+    if (env.OLLIVER_HTTP_ALLOWED_HOSTS) fromEnv.allowedHosts = env.OLLIVER_HTTP_ALLOWED_HOSTS;
+    if (env.OLLIVER_EXPOSE) fromEnv.expose = env.OLLIVER_EXPOSE;
 
-    return { ...DEFAULTS, ...fromEnv, ...overrides };
+    const merged = { ...DEFAULTS, ...fromEnv, ...overrides };
+    const expose = parseList(merged.expose);
+
+    return {
+        ...merged,
+        cfTeamDomain: normalizeTeamDomain(merged.cfTeamDomain),
+        cfAud: merged.cfAud ? String(merged.cfAud).trim() : null,
+        allowedHosts: parseList(merged.allowedHosts),
+        expose: expose.length > 0 ? expose : null,
+    };
 }
 
 function isLoopbackHost(host) {
     return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+/**
+ * Enforce the startup rules and report which auth doors are enabled.
+ * Throws with a message naming the env vars to set; never echoes a secret.
+ *
+ *   front — Cloudflare Access JWT (needs both team domain and AUD)
+ *   side  — LAN bearer token (OLLIVER_LAN_TOKEN, >= 32 chars)
+ *
+ * A non-loopback bind with neither door configured is refused outright.
+ */
+export function resolveDoors(config) {
+    const hasTeam = Boolean(config.cfTeamDomain);
+    const hasAud = Boolean(config.cfAud);
+
+    if (hasTeam !== hasAud) {
+        throw new Error(
+            "Cloudflare Access needs both OLLIVER_CF_TEAM_DOMAIN (--cf-team-domain) " +
+            "and OLLIVER_CF_AUD (--cf-aud); only one is set.",
+        );
+    }
+
+    if (config.lanToken && config.lanToken.length < LAN_TOKEN_MIN_LENGTH) {
+        throw new Error(
+            `OLLIVER_LAN_TOKEN must be at least ${LAN_TOKEN_MIN_LENGTH} characters.`,
+        );
+    }
+
+    const doors = {
+        front: hasTeam && hasAud,
+        side: Boolean(config.lanToken),
+    };
+
+    if (!isLoopbackHost(config.host) && !doors.front && !doors.side) {
+        throw new Error(
+            `Refusing to bind ${config.host} with no auth door configured. ` +
+            "Set OLLIVER_LAN_TOKEN (side door) and/or OLLIVER_CF_TEAM_DOMAIN + " +
+            "OLLIVER_CF_AUD (front door), or bind to 127.0.0.1.",
+        );
+    }
+
+    return doors;
 }
 
 function makeLogger(level) {
@@ -79,7 +166,7 @@ function makeLogger(level) {
     };
 }
 
-function printStartupBanner({ url, host, port, version }) {
+function printStartupBanner({ url, host, port, version, config, doors }) {
     const lines = [
         "",
         "Olliver MCP server (HTTP transport)",
@@ -87,34 +174,64 @@ function printStartupBanner({ url, host, port, version }) {
         `  Health:   http://${host}:${port}/health`,
         `  Version:  ${version}`,
         "",
+        "  Doors:",
+        `    Front (Cloudflare Access): ${doors.front ? `enabled — ${config.cfTeamDomain}` : "disabled"}`,
+        `    Side  (LAN bearer token):  ${doors.side ? "enabled" : "disabled"}`,
     ];
-    if (!isLoopbackHost(host)) {
+    if (config.allowedHosts.length > 0) {
+        lines.push(`  Allowed hosts: ${config.allowedHosts.join(", ")}`);
+    }
+    if (config.expose) {
+        lines.push(`  Exposed environments: ${config.expose.join(", ")}`);
+    }
+    lines.push("");
+
+    if (!doors.front && !doors.side) {
         lines.push(
-            "  ⚠  Bound to a non-loopback address. Anyone reaching this port",
-            "     can run any Olliver tool, including writes. There is no",
-            "     authentication in this stream — put a TLS reverse proxy with",
-            "     auth (Tailscale, Cloudflare Access, nginx + basic auth) in",
-            "     front, or restrict the listener with a firewall.",
+            "  ⚠  No auth doors configured — loopback dev mode, every request is allowed.",
             "",
         );
     }
+
     lines.push(
-        "  Connect a stdio-only client (Claude Code, Cursor) via mcp-remote:",
+        "  Connect a stdio-only client (Claude Code, Codex, Desktop) via mcp-remote:",
         "",
         "  {",
         '    "mcpServers": {',
         '      "olliver": {',
         '        "command": "npx",',
-        `        "args": ["-y", "mcp-remote", "${url}"]`,
+    );
+    if (doors.side) {
+        lines.push(
+            `        "args": ["-y", "mcp-remote", "${url}",`,
+            '                 "--header", "Authorization: Bearer ${OLLIVER_LAN_TOKEN}"],',
+            '        "env": { "OLLIVER_LAN_TOKEN": "<your LAN token>" }',
+        );
+    } else {
+        lines.push(`        "args": ["-y", "mcp-remote", "${url}"]`);
+    }
+    lines.push(
         "      }",
         "    }",
         "  }",
         "",
-        "  ChatGPT custom apps require OAuth. Olliver's OAuth stream is a",
-        "  later release; for personal use today, place this server behind a",
-        "  network boundary (Tailscale, etc.) and connect clients there.",
-        "",
     );
+
+    if (doors.front) {
+        lines.push(
+            "  ChatGPT, Copilot, Gemini, Grok, and claude.ai connect through the",
+            "  front door: your Cloudflare Tunnel hostname, behind Cloudflare Access",
+            "  with Managed OAuth. See `olli help` → Transports.",
+            "",
+        );
+    } else {
+        lines.push(
+            "  Hosted clients (ChatGPT, Copilot, Gemini, Grok, claude.ai) need the",
+            "  front door: set OLLIVER_CF_TEAM_DOMAIN and OLLIVER_CF_AUD and put a",
+            "  Cloudflare Tunnel + Access app in front. See `olli help` → Transports.",
+            "",
+        );
+    }
     for (const line of lines) console.error(line);
 }
 
@@ -125,6 +242,7 @@ function printStartupBanner({ url, host, port, version }) {
  */
 export async function startHttpTransport(buildServer, configOverrides = {}) {
     const config = resolveHttpConfig(configOverrides);
+    const doors = resolveDoors(config);
     const log = makeLogger(config.logLevel);
     const version = readPackageVersion();
 
@@ -209,6 +327,8 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
             host: config.host,
             port: config.port,
             version,
+            config,
+            doors,
         });
     });
 

@@ -30,7 +30,14 @@ switch (transportMode) {
         // via the buildServer factory. Imported lazily so stdio users don't
         // pay for express/cors loading.
         const { startHttpTransport } = await import("./transports/http.js");
-        await startHttpTransport(buildServer);
+        try {
+            await startHttpTransport(buildServer);
+        } catch (err) {
+            // Startup-rule violations (no door on a public bind, bad token,
+            // half-configured Cloudflare) land here — fail fast, no stack.
+            console.error(`[olliver-http] error: ${err.message}`);
+            process.exit(1);
+        }
         break;
     }
 

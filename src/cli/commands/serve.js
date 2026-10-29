@@ -21,6 +21,19 @@ export default function serveCommand(program) {
             "--log-level <level>",
             "Request log level: error|warn|info|debug (default info)",
         )
+        .option(
+            "--cf-team-domain <domain>",
+            "Cloudflare Access team domain, e.g. yourteam.cloudflareaccess.com",
+        )
+        .option("--cf-aud <aud>", "Cloudflare Access application AUD tag")
+        .option(
+            "--allowed-hosts <hosts>",
+            "Comma-separated extra Host values, e.g. olliver.example.com",
+        )
+        .option(
+            "--expose <environments>",
+            "Comma-separated allowlist of environments served over HTTP",
+        )
         .action(async (opts) => {
             try {
                 const overrides = {};
@@ -36,6 +49,10 @@ export default function serveCommand(program) {
                 if (opts.logLevel !== undefined) {
                     overrides.logLevel = String(opts.logLevel).toLowerCase();
                 }
+                if (opts.cfTeamDomain !== undefined) overrides.cfTeamDomain = opts.cfTeamDomain;
+                if (opts.cfAud !== undefined) overrides.cfAud = opts.cfAud;
+                if (opts.allowedHosts !== undefined) overrides.allowedHosts = opts.allowedHosts;
+                if (opts.expose !== undefined) overrides.expose = opts.expose;
 
                 const { buildServer } = await import("../../server.js");
                 const { startHttpTransport } = await import(
