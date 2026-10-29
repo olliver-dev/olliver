@@ -26,9 +26,28 @@ import { existsSync, readFileSync } from "fs";
 import os from "os";
 import { resolveShelf, checkUpgrade } from "./shared/resolve.js";
 import { safeSegment, resolveInside } from "./shared/safe-segment.js";
+import { writeFileAtomic } from "./shared/write-file-atomic.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// ─── Single-Writer Lock ────────────────────────────────────────────
+// One promise chain per environment. Module scope, so every per-request
+// buildServer() instance in the HTTP transport shares it: mutating tools
+// run one at a time per environment, reads never wait.
+
+const envLocks = new Map();
+
+function withEnvLock(envName, task) {
+    const previous = envLocks.get(envName) ?? Promise.resolve();
+    const run = previous.then(task);
+    const settled = run.then(() => {}, () => {});
+    envLocks.set(envName, settled);
+    settled.then(() => {
+        if (envLocks.get(envName) === settled) envLocks.delete(envName);
+    });
+    return run;
+}
 
 // ─── Default Configuration ─────────────────────────────────────────
 // Used when no config.json exists in the environment directory
@@ -311,7 +330,7 @@ ${entryTexts.length > 0 ? entryTexts.join("\n\n") : "(empty)"}
 - Capsule Count: ${rack.size}
 `;
 
-        await fs.writeFile(rackPath, content, "utf-8");
+        await writeFileAtomic(rackPath, content);
     }
 
     // ─── Capsule Discovery & Access ──────────────────────────────────
@@ -522,10 +541,9 @@ ${new Date().toISOString()}
 (none)
 `;
 
-        await fs.writeFile(
+        await writeFileAtomic(
             path.join(extractionDir, "extraction-state.md"),
             stateContent,
-            "utf-8",
         );
 
         return {
@@ -560,7 +578,7 @@ ${new Date().toISOString()}
 
         const filePath = resolveInside(envDir, "extractions", streamId, safeName);
 
-        await fs.writeFile(filePath, content, "utf-8");
+        await writeFileAtomic(filePath, content);
         await this.updateExtractionState(streamId, safeName, envDir);
 
         return {
@@ -596,7 +614,7 @@ ${new Date().toISOString()}
                     `## Passes Completed\n${newPasses}\n`,
                 );
 
-                await fs.writeFile(statePath, stateContent, "utf-8");
+                await writeFileAtomic(statePath, stateContent);
             }
         }
     }
@@ -692,7 +710,7 @@ status: pending
 
 ${content}`;
 
-        await fs.writeFile(draftPath, draftContent, "utf-8");
+        await writeFileAtomic(draftPath, draftContent);
 
         const result = {
             stream_id: streamId || null,
@@ -734,7 +752,7 @@ ${content}`;
             };
         }
 
-        await fs.writeFile(draftPath, content, "utf-8");
+        await writeFileAtomic(draftPath, content);
 
         return {
             status: "draft_updated",
@@ -937,7 +955,7 @@ ${content}`;
         }
 
         // Write capsule to shelf
-        await fs.writeFile(targetPath, content, "utf-8");
+        await writeFileAtomic(targetPath, content);
 
         // Write SHELF.md entry atomically
         try {
@@ -1028,7 +1046,7 @@ original_path: ${draftPath}
 
         const rejectedContent =
             rejectionMeta + (await fs.readFile(rejectedPath, "utf-8"));
-        await fs.writeFile(rejectedPath, rejectedContent, "utf-8");
+        await writeFileAtomic(rejectedPath, rejectedContent);
 
         return {
             rejected: draftFilename,
@@ -1388,10 +1406,9 @@ Its purpose is to:
 
 ## Context Capsules
 `;
-        await fs.writeFile(
+        await writeFileAtomic(
             path.join(envPath, "SHELF.md"),
             shelfMdContent,
-            "utf-8",
         );
 
         // Write RACK.md
@@ -1410,10 +1427,9 @@ ${envDirName}
 - Last Modified: ${new Date().toISOString()}
 - Capsule Count: 0
 `;
-        await fs.writeFile(
+        await writeFileAtomic(
             path.join(envPath, "RACK.md"),
             rackContent,
-            "utf-8",
         );
 
         // Create flat directories
@@ -1442,10 +1458,9 @@ ${envDirName}
             "## Crated Capsules",
             "",
         ].join("\n");
-        await fs.writeFile(
+        await writeFileAtomic(
             path.join(envPath, "CRATE.md"),
             crateScaffold,
-            "utf-8",
         );
 
         // Verify environment is immediately discoverable
@@ -2020,7 +2035,8 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.mountCapsule(capsulePath, env.envDir, env.resolved);
+                            const result = await withEnvLock(env.resolved, () =>
+                                this.mountCapsule(capsulePath, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2038,8 +2054,8 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result =
-                                await this.unmountCapsule(capsulePath, env.envDir, env.resolved);
+                            const result = await withEnvLock(env.resolved, () =>
+                                this.unmountCapsule(capsulePath, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2073,8 +2089,8 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result =
-                                await this.beginExtraction(stream_id, env.envDir, env.resolved);
+                            const result = await withEnvLock(env.resolved, () =>
+                                this.beginExtraction(stream_id, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2092,12 +2108,12 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.writePassOutput(
+                            const result = await withEnvLock(env.resolved, () => this.writePassOutput(
                                 stream_id,
                                 filename,
                                 content,
                                 env.envDir,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2123,7 +2139,7 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.writeDraftCapsule(
+                            const result = await withEnvLock(env.resolved, () => this.writeDraftCapsule(
                                 stream_id,
                                 filename,
                                 role,
@@ -2133,7 +2149,7 @@ ${envDirName}
                                 rename_to,
                                 env.envDir,
                                 env.resolved,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2157,12 +2173,12 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.editDraftCapsule(
+                            const result = await withEnvLock(env.resolved, () => this.editDraftCapsule(
                                 filename,
                                 content,
                                 env.envDir,
                                 env.resolved,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2205,14 +2221,14 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.promoteDraft(
+                            const result = await withEnvLock(env.resolved, () => this.promoteDraft(
                                 draft_filename,
                                 category,
                                 target_role,
                                 capsule_meta,
                                 env.envDir,
                                 env.resolved,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2230,12 +2246,12 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.rejectDraft(
+                            const result = await withEnvLock(env.resolved, () => this.rejectDraft(
                                 draft_filename,
                                 reason,
                                 env.envDir,
                                 env.resolved,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2270,14 +2286,14 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.stageSource(
+                            const result = await withEnvLock(env.resolved, () => this.stageSource(
                                 filename,
                                 category,
                                 role,
                                 stream_id,
                                 env.envDir,
                                 env.resolved,
-                            );
+                            ));
                             return {
                                 content: [
                                     {
@@ -2290,7 +2306,9 @@ ${envDirName}
 
                         case "create_environment": {
                             const { name } = request.params.arguments;
-                            const result = await this.createEnvironment(name);
+                            // Keyed on the new name — serializes racing creates
+                            const result = await withEnvLock(String(name), () =>
+                                this.createEnvironment(name));
                             return {
                                 content: [
                                     {
@@ -2332,11 +2350,11 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.editManifest({
+                            const result = await withEnvLock(env.resolved, () => this.editManifest({
                                 manifest, action, lookup,
                                 feature, file, categories, roles, scope,
                                 depends_on, updated, source_stream, crated,
-                            }, env.envDir, env.resolved);
+                            }, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2358,9 +2376,9 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.crateCapsule({
+                            const result = await withEnvLock(env.resolved, () => this.crateCapsule({
                                 path: capsulePath,
-                            }, env.envDir, env.resolved);
+                            }, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2381,9 +2399,9 @@ ${envDirName}
                             if (env.prompt) {
                                 return { content: [{ type: "text", text: env.message }] };
                             }
-                            const result = await this.uncrateCapsule({
+                            const result = await withEnvLock(env.resolved, () => this.uncrateCapsule({
                                 path: cratedPath,
-                            }, env.envDir, env.resolved);
+                            }, env.envDir, env.resolved));
                             return {
                                 content: [
                                     {
@@ -2529,7 +2547,7 @@ ${envDirName}
                 "## Crated Capsules",
                 "",
             ].join("\n");
-            await fs.writeFile(crateMdPath, scaffold, "utf-8");
+            await writeFileAtomic(crateMdPath, scaffold);
         }
 
         // Write CRATE.md entry
@@ -2559,7 +2577,7 @@ ${envDirName}
 
         const crateMdContent = await fs.readFile(crateMdPath, "utf-8");
         const newCrateContent = crateMdContent.trimEnd() + "\n\n" + crateEntry + "\n";
-        await fs.writeFile(crateMdPath, newCrateContent, "utf-8");
+        await writeFileAtomic(crateMdPath, newCrateContent);
 
         // Remove SHELF.md entry
         if (shelfEntry && existsSync(shelfMdPath)) {
@@ -2581,11 +2599,11 @@ ${envDirName}
 
             const newShelfContent =
                 shelfContent.slice(0, removeStart) + shelfContent.slice(removeEnd);
-            await fs.writeFile(shelfMdPath, newShelfContent, "utf-8");
+            await writeFileAtomic(shelfMdPath, newShelfContent);
         }
 
         // Write crated file (content unchanged)
-        await fs.writeFile(cratedPath, content, "utf-8");
+        await writeFileAtomic(cratedPath, content);
 
         // Delete original file
         await fs.unlink(sourcePath);
@@ -2677,7 +2695,7 @@ ${envDirName}
         await fs.mkdir(shelfDir, { recursive: true });
 
         // Move file to shelf/
-        await fs.writeFile(restoredFullPath, content, "utf-8");
+        await writeFileAtomic(restoredFullPath, content);
         await fs.unlink(fullCratedPath);
 
         // Remove entry from CRATE.md
@@ -2707,7 +2725,7 @@ ${envDirName}
 
                 const newCrateContent =
                     crateContent.slice(0, removeStart) + crateContent.slice(removeEnd);
-                await fs.writeFile(crateMdPath, newCrateContent, "utf-8");
+                await writeFileAtomic(crateMdPath, newCrateContent);
                 crateEntryRemoved = true;
             }
         }
@@ -3199,7 +3217,7 @@ ${envDirName}
                 });
 
                 const newContent = content.trimEnd() + "\n\n" + newEntry + "\n";
-                await fs.writeFile(manifestPath, newContent, "utf-8");
+                await writeFileAtomic(manifestPath, newContent);
 
                 return {
                     status: "success",
@@ -3245,7 +3263,7 @@ ${envDirName}
                     content.slice(0, existing.start) +
                     newEntryText +
                     content.slice(existing.end);
-                await fs.writeFile(manifestPath, newContent, "utf-8");
+                await writeFileAtomic(manifestPath, newContent);
 
                 return {
                     status: "success",
@@ -3289,7 +3307,7 @@ ${envDirName}
 
                 const newContent =
                     content.slice(0, removeStart) + content.slice(removeEnd);
-                await fs.writeFile(manifestPath, newContent, "utf-8");
+                await writeFileAtomic(manifestPath, newContent);
 
                 return {
                     status: "success",
