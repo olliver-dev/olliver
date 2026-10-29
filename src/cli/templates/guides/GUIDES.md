@@ -40,7 +40,7 @@
 
 - Topic: Transports
   File: transports.md
-  Scope: Stdio vs HTTP transports, olli serve usage, mcp-remote bridge for stdio clients, ChatGPT/OAuth caveat, security model, stateless mode rationale
+  Scope: Stdio vs HTTP transports, olli serve usage, two-door auth (Cloudflare Access front door, LAN token side door), env var table, mcp-remote bridge for stdio clients, security model, stateless mode rationale
 
 ## Setup Guides
 

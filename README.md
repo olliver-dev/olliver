@@ -146,7 +146,7 @@ Capsule management happens conversationally through your AI client, not the CLI.
 
 ## Transports
 
-Olliver speaks MCP over **stdio** (the default; clients spawn a local process) or **Streamable HTTP** (a network-reachable endpoint for ChatGPT, hosted agents, and personal LAN setups). Tool semantics are identical across both. Run `olli serve` for an HTTP listener with sensible loopback defaults, or set `OLLIVER_TRANSPORT=http` for a Docker- or systemd-friendly env var path. See `olli help` → Transports for the full guide, including the `mcp-remote` bridge for stdio-only clients and the security model.
+Olliver speaks MCP over **stdio** (the default; clients spawn a local process) or **Streamable HTTP** (a network-reachable endpoint). Tool semantics are identical across both. Run `olli serve` for an HTTP listener with loopback defaults, or set `OLLIVER_TRANSPORT=http` for a Docker- or systemd-friendly env var path. Off loopback, every request comes through one of two doors: the **front door**, a Cloudflare Tunnel hostname behind Cloudflare Access with Managed OAuth (ChatGPT, Copilot, Gemini, Grok, claude.ai), or the **side door**, a LAN bearer token (`OLLIVER_LAN_TOKEN`) for Claude Code, Codex, and Desktop via `mcp-remote`. The server refuses to bind off loopback with neither door configured. See `olli help` → Transports for setup, the env var table, and the security model.
 
 ## Architecture
 
