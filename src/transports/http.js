@@ -257,12 +257,26 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
         allowedHosts.push(config.host, `${config.host}:${portStr}`);
     }
 
+    // Extra hostnames (e.g. the Cloudflare Tunnel public hostname) join the
+    // rebinding allowlist bare and with the port. Protection stays on.
+    const extraHosts = config.allowedHosts.map((h) => h.toLowerCase());
+    for (const extra of extraHosts) {
+        for (const candidate of [extra, `${extra}:${portStr}`]) {
+            if (!allowedHosts.includes(candidate)) allowedHosts.push(candidate);
+        }
+    }
+
+    // Requests without an Origin header (server-to-server, CLI clients)
+    // pass the SDK's origin check untouched; this list only gates browsers.
     const allowedOrigins = [
         `http://127.0.0.1:${portStr}`,
         `http://localhost:${portStr}`,
     ];
     if (!isLoopbackHost(config.host)) {
         allowedOrigins.push(`http://${config.host}:${portStr}`);
+    }
+    for (const extra of extraHosts) {
+        allowedOrigins.push(`https://${extra}`);
     }
 
     const app = express();
@@ -271,7 +285,13 @@ export async function startHttpTransport(buildServer, configOverrides = {}) {
     app.use(cors({
         origin: allowedOrigins,
         methods: ["GET", "POST", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "MCP-Protocol-Version", "Mcp-Session-Id"],
+        allowedHeaders: [
+            "Content-Type",
+            "MCP-Protocol-Version",
+            "Mcp-Session-Id",
+            "Authorization",
+            "Cf-Access-Jwt-Assertion",
+        ],
     }));
 
     app.use((req, res, next) => {
